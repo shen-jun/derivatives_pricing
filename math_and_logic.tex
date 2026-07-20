@@ -1,0 +1,517 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{enumitem}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=cyan,
+    pdftitle={Math and Logic Behind My Derivative Pricing Engine},
+    pdfpagemode=FullScreen,
+}
+
+\title{\textbf{Project: Derivative Pricing Engine}}
+\author{Jun Shen}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Why I Wrote This Document}
+
+In this project, I built a Python derivatives analytics platform that prices
+seven different option types using five different pricing techniques
+(a closed-form Black-Scholes-Merton formula, a closed-form Black-76 formula,
+two binomial tree constructions, a Monte Carlo simulation engine, and an
+explicit finite difference PDE solver). Rather than scattering the math
+across code comments, I collected every formula I actually implemented into
+this single document, in the same order I built the code. My goal is that
+anyone reviewing my project can read this document side by side with the
+corresponding Python file and verify that what I coded matches what I
+claim I coded.
+
+\subsection{My Notation}
+
+Throughout this document I use the following symbols consistently:
+
+\begin{itemize}[noitemsep]
+    \item $S$ : spot price of the underlying asset (or $F$ for a futures price)
+    \item $K$ : strike price
+    \item $T$ : time to expiry, in years
+    \item $r$ : continuously compounded risk-free rate
+    \item $q$ : continuous dividend yield
+    \item $\sigma$ : annualized volatility of the underlying
+    \item $N(\cdot)$ : cumulative distribution function of the standard normal distribution
+    \item $n(\cdot)$ : probability density function of the standard normal distribution
+\end{itemize}
+
+\section{Black-Scholes-Merton Model}
+
+I use this model for the "European Call and Put" product bucket. It is
+implemented in \texttt{src/models/black\_scholes.py}.
+
+\subsection{The $d_1$ and $d_2$ Terms}
+
+Every formula in this section is built from two auxiliary quantities:
+
+\begin{equation}
+d_1 = \frac{\ln(S/K) + \left(r - q + \frac{1}{2}\sigma^2\right)T}{\sigma\sqrt{T}}, \qquad
+d_2 = d_1 - \sigma\sqrt{T}
+\end{equation}
+
+I compute these once per pricing call in my \texttt{d1\_d2()} helper
+function in \texttt{src/models/math\_utils.py}, and every other formula in
+this section reuses that same pair.
+
+\subsection{Price}
+
+\begin{align}
+C &= S e^{-qT} N(d_1) - K e^{-rT} N(d_2) \\
+P &= K e^{-rT} N(-d_2) - S e^{-qT} N(-d_1)
+\end{align}
+
+\subsection{Greeks}
+
+\begin{align}
+\Delta_{call} &= e^{-qT} N(d_1) \\
+\Delta_{put} &= -e^{-qT} N(-d_1) \\
+\Gamma &= \frac{e^{-qT} n(d_1)}{S \sigma \sqrt{T}} \quad \text{(same for calls and puts)} \\
+\mathcal{V} &= S e^{-qT} n(d_1) \sqrt{T} \quad \text{(same for calls and puts, "Vega")} \\
+\Theta_{call} &= -\frac{S e^{-qT} n(d_1) \sigma}{2\sqrt{T}} - rKe^{-rT}N(d_2) + qSe^{-qT}N(d_1) \\
+\Theta_{put} &= -\frac{S e^{-qT} n(d_1) \sigma}{2\sqrt{T}} + rKe^{-rT}N(-d_2) - qSe^{-qT}N(-d_1) \\
+\rho_{call} &= KTe^{-rT}N(d_2) \\
+\rho_{put} &= -KTe^{-rT}N(-d_2)
+\end{align}
+
+I report $\Theta$ as a per-year quantity and divide by 365 whenever I want
+per-calendar-day time decay, and I report $\mathcal{V}$ and $\rho$ per unit
+change in $\sigma$ and $r$ respectively (I scale these down by 0.01 or
+0.0001 in my reporting layer whenever I want "per vol point" or "per basis
+point" units).
+
+\subsection{Put-Call Parity}
+
+I rely on this identity throughout my model validation suite:
+
+\begin{equation}
+C - P = S e^{-qT} - K e^{-rT}
+\end{equation}
+
+\subsection{No-Arbitrage Bounds}
+
+For a European option, I never expect a fair price outside these bounds:
+
+\begin{align}
+\max\left(Se^{-qT} - Ke^{-rT},\ 0\right) &\le C \le Se^{-qT} \\
+\max\left(Ke^{-rT} - Se^{-qT},\ 0\right) &\le P \le Ke^{-rT}
+\end{align}
+
+I use these bounds in two places: to reject an obviously bad market price
+before running my implied volatility solver, and as a sanity check in my
+model validation test suite.
+
+\section{Black-76 Model}
+
+I use this model for the "Options on Futures" product bucket, implemented
+in \texttt{src/models/black76.py}. I treat the futures price $F$ the same
+way I treated $S$ in Black-Scholes-Merton, except that I set the cost of
+carry to zero, since a futures price already embeds any carry.
+
+\subsection{The $d_1$ and $d_2$ Terms}
+
+\begin{equation}
+d_1 = \frac{\ln(F/K) + \frac{1}{2}\sigma^2 T}{\sigma\sqrt{T}}, \qquad d_2 = d_1 - \sigma\sqrt{T}
+\end{equation}
+
+\subsection{Price}
+
+\begin{align}
+C &= e^{-rT}\left[F N(d_1) - K N(d_2)\right] \\
+P &= e^{-rT}\left[K N(-d_2) - F N(-d_1)\right]
+\end{align}
+
+\subsection{Greeks}
+
+\begin{align}
+\Delta_{call} &= e^{-rT} N(d_1) \\
+\Delta_{put} &= -e^{-rT} N(-d_1) \\
+\Gamma &= \frac{e^{-rT} n(d_1)}{F \sigma \sqrt{T}} \\
+\mathcal{V} &= F e^{-rT} n(d_1) \sqrt{T} \\
+\Theta_{call} &= -\frac{Fe^{-rT}n(d_1)\sigma}{2\sqrt{T}} + rFe^{-rT}N(d_1) - rKe^{-rT}N(d_2) \\
+\Theta_{put} &= -\frac{Fe^{-rT}n(d_1)\sigma}{2\sqrt{T}} - rFe^{-rT}N(-d_1) + rKe^{-rT}N(-d_2)
+\end{align}
+
+\subsection{Rho: A Shortcut I Rely On}
+
+Because $r$ only ever enters the Black-76 formula through the discount
+factor $e^{-rT}$ multiplying the entire risk-neutral expectation, I get a
+very clean identity:
+
+\begin{equation}
+\rho = \frac{\partial V}{\partial r} = -T \cdot V
+\end{equation}
+
+I implement \texttt{rho()} in \texttt{black76.py} as literally
+\texttt{-self.time\_to\_expiry * self.price()}, and I have a unit test in
+\texttt{tests/test\_black76.py} confirming this against the model's own
+price.
+
+\section{Binomial Trees: CRR and Leisen-Reimer}
+
+I use these two tree constructions for the "American Call and Put" product
+bucket, implemented in \texttt{src/models/binomial\_tree.py}. Both trees
+share the exact same backward induction and early-exercise logic; they only
+differ in how they compute the up-move factor $u$, down-move factor $d$,
+and risk-neutral probability $p$.
+
+\subsection{Cox-Ross-Rubinstein (CRR) Parameters}
+
+With $n$ steps and $\Delta t = T/n$:
+
+\begin{align}
+u &= e^{\sigma\sqrt{\Delta t}} \\
+d &= \frac{1}{u} \\
+p &= \frac{e^{(r-q)\Delta t} - d}{u - d}
+\end{align}
+
+\subsection{Leisen-Reimer (LR) Parameters}
+
+The LR construction is built so that the tree's implied risk-neutral
+probability matches the Black-Scholes $d_1$/$d_2$ terms directly, via the
+Peizer-Pratt inversion function:
+
+\begin{equation}
+h(z) = \frac{1}{2} + \text{sign}(z)\sqrt{\frac{1}{4} - \frac{1}{4}\exp\left[-\left(\frac{z}{n + \frac{1}{3} + \frac{0.1}{n+1}}\right)^2 \left(n + \frac{1}{6}\right)\right]}
+\end{equation}
+
+I compute $d_1$ and $d_2$ once, using the full time to expiry $T$ (not
+$\Delta t$), exactly as in the Black-Scholes-Merton section above. Then:
+
+\begin{align}
+p &= h(d_2) \\
+p' &= h(d_1) \\
+u &= e^{(r-q)\Delta t} \cdot \frac{p'}{p} \\
+d &= \frac{e^{(r-q)\Delta t} - pu}{1-p}
+\end{align}
+
+I force the number of steps $n$ to be odd in my \texttt{LeisenReimerTree}
+class, since the LR construction is designed around an odd step count so
+the middle terminal node lines up with the strike.
+
+\subsection{Backward Induction and Early Exercise}
+
+Regardless of which set of $(u, d, p)$ I am using, I build the terminal
+payoffs at maturity, and then, for every step $i$ from $n-1$ down to $0$
+and every node $j$ from $0$ to $i$:
+
+\begin{equation}
+V_{i,j} = \max\Big(\underbrace{e^{-r\Delta t}\left[p V_{i+1,j+1} + (1-p)V_{i+1,j}\right]}_{\text{continuation value}},\ \underbrace{\phi(S_{i,j})}_{\text{intrinsic value, American only}}\Big)
+\end{equation}
+
+where $S_{i,j} = S_0 u^j d^{i-j}$ is the asset price at node $(i,j)$, and
+$\phi$ is the call or put payoff function. For a European contract, I skip
+the $\max$ with intrinsic value and just take the continuation value.
+
+\subsection{Greeks From the Tree}
+
+I read delta, gamma and theta directly off the tree's early nodes, which
+avoids having to bump-and-reprice the whole tree three separate times:
+
+\begin{align}
+\Delta &= \frac{V_{1,1} - V_{1,0}}{S_0 u - S_0 d} \\
+\Gamma &= \frac{\left(\frac{V_{2,2}-V_{2,1}}{S_0u^2 - S_0ud}\right) - \left(\frac{V_{2,1}-V_{2,0}}{S_0ud - S_0d^2}\right)}{\frac{1}{2}(S_0u^2 - S_0d^2)} \\
+\Theta &= \frac{V_{2,1} - V_{0,0}}{2\Delta t}
+\end{align}
+
+The Theta formula above works because node $(2,1)$ has asset price
+$S_0 u d = S_0$ (one up move and one down move cancel out), so I am
+comparing the option value at the same spot price two time steps apart,
+which gives a clean central-difference-in-time estimate.
+
+For vega and rho, I do not have a similarly clean closed form on the tree,
+so I bump volatility (or the risk-free rate) by a small amount, rebuild the
+whole tree, and take a central finite difference of the resulting prices.
+This is standard industry practice for tree-based vega/rho.
+
+\subsection{Early Exercise Boundary}
+
+I trace the early exercise boundary by scanning, at every time step before
+maturity, for the asset price closest to the strike where the tree's option
+value equals its intrinsic value (immediate exercise is optimal). I
+implement this in \texttt{early\_exercise\_boundary()}, and plot it in my
+"Early Exercise Boundary" chart.
+
+\section{Monte Carlo Engine}
+
+I use Monte Carlo simulation for three path-dependent product buckets:
+Asian options, Lookback options, and Basket options, implemented in
+\texttt{src/models/monte\_carlo.py}.
+
+\subsection{Geometric Brownian Motion Discretization}
+
+I simulate the underlying under the risk-neutral measure using the exact
+lognormal discretization of GBM (not an Euler-Maruyama approximation),
+one time step at a time:
+
+\begin{equation}
+S(t + \Delta t) = S(t) \exp\left[\left(r - q - \frac{1}{2}\sigma^2\right)\Delta t + \sigma\sqrt{\Delta t}\, Z\right], \qquad Z \sim \mathcal{N}(0,1)
+\end{equation}
+
+I roll this recursion forward with an explicit Python for-loop over the
+number of time steps in a path, one multiplication at a time, rather than
+building the whole path with a vectorized cumulative product.
+
+\subsection{Antithetic Variates}
+
+For every set of standard normal draws $Z_1, \dots, Z_m$ I use to build one
+path, I also build a second path using $-Z_1, \dots, -Z_m$. Averaging the
+payoff of a path with its antithetic partner reduces the variance of my
+Monte Carlo estimator whenever the payoff function is a monotonic function
+of the path (true for Asian, Lookback and Basket calls/puts), because the
+two paths are negatively correlated by construction while sharing the same
+marginal distribution.
+
+\subsection{Discounted Price and Standard Error}
+
+Given $M$ simulated payoffs $X_1, \dots, X_M$:
+
+\begin{align}
+\hat{V} &= e^{-rT} \cdot \bar{X}, \qquad \bar{X} = \frac{1}{M}\sum_{i=1}^{M} X_i \\
+\widehat{SE} &= e^{-rT} \cdot \sqrt{\frac{s^2}{M}}, \qquad s^2 = \frac{1}{M-1}\sum_{i=1}^M (X_i - \bar{X})^2
+\end{align}
+
+and I report a 95\% confidence interval as $\hat{V} \pm 1.96 \cdot \widehat{SE}$.
+
+\subsection{Payoffs I Implement}
+
+\begin{align}
+\text{Asian call} &: \max\left(\frac{1}{m}\sum_{k=1}^m S(t_k) - K,\ 0\right) \\
+\text{Asian put} &: \max\left(K - \frac{1}{m}\sum_{k=1}^m S(t_k),\ 0\right) \\
+\text{Fixed-strike lookback call} &: \max\left(\max_k S(t_k) - K,\ 0\right) \\
+\text{Fixed-strike lookback put} &: \max\left(K - \min_k S(t_k),\ 0\right) \\
+\text{Floating-strike lookback call} &: S(T) - \min_k S(t_k) \\
+\text{Floating-strike lookback put} &: \max_k S(t_k) - S(T)
+\end{align}
+
+\subsection{Basket Options and Correlated Paths}
+
+For a basket of $N$ underlyings with correlation matrix $\rho$, I factor
+$\rho = LL^\top$ using the Cholesky decomposition (computed by hand with
+explicit nested loops in \texttt{\_cholesky\_decomposition()}), then at
+every time step I draw $N$ independent standard normals $\epsilon$ and
+correlate them as $Z = L\epsilon$, before applying the usual GBM update
+to each asset $i$ separately using $Z_i$. The basket payoff is:
+
+\begin{equation}
+\text{Basket call} = \max\left(\sum_{i=1}^N w_i S_i(T) - K,\ 0\right)
+\end{equation}
+
+\subsection{Greeks by Finite Differences (Bump-and-Reprice)}
+
+Because Monte Carlo does not give me an analytic Greek, I estimate every
+Greek by bumping one input, rebuilding the model, and repricing, always
+reusing the same \texttt{random\_seed} between the bumped and unbumped
+simulations (the "common random numbers" technique). Sharing the random
+seed cancels out most of the simulation noise between the two prices,
+which is what makes a finite-difference Greek usable at all on top of a
+noisy Monte Carlo price:
+
+\begin{align}
+\Delta &\approx \frac{V(S+h) - V(S-h)}{2h} \\
+\Gamma &\approx \frac{V(S+h) - 2V(S) + V(S-h)}{h^2} \\
+\mathcal{V} &\approx \frac{V(\sigma+h) - V(\sigma-h)}{2h} \\
+\Theta &\approx \frac{V(T-h) - V(T)}{h} \\
+\rho &\approx \frac{V(r+h) - V(r-h)}{2h}
+\end{align}
+
+\section{Finite Difference PDE for Barrier Options}
+
+I use an explicit finite difference scheme for the "Barrier Options"
+product bucket, implemented in \texttt{src/models/finite\_difference.py}.
+
+\subsection{The Black-Scholes PDE}
+
+Every one of my pricing models ultimately prices a claim on the same
+underlying dynamics, which satisfy the Black-Scholes partial differential
+equation:
+
+\begin{equation}
+\frac{\partial V}{\partial t} + \frac{1}{2}\sigma^2 S^2 \frac{\partial^2 V}{\partial S^2} + (r-q)S\frac{\partial V}{\partial S} - rV = 0
+\end{equation}
+
+\subsection{Explicit Finite Difference Discretization}
+
+I discretize $S$ into $M$ steps of size $\Delta S = S_{max}/M$ and $t$ into
+$N$ steps of size $\Delta t = T/N$, and write $V_i^j$ for the option value
+at price node $S_i = i\Delta S$ and time node $j$ (where $j=N$ is maturity
+and $j=0$ is today). Using a forward difference in time and central
+differences in $S$, I get the explicit update rule:
+
+\begin{equation}
+V_i^{j} = a_i V_{i-1}^{j+1} + b_i V_i^{j+1} + c_i V_{i+1}^{j+1}
+\end{equation}
+
+with coefficients
+
+\begin{align}
+a_i &= \frac{1}{2}\Delta t\left(\sigma^2 i^2 - (r-q)i\right) \\
+b_i &= 1 - \Delta t\left(\sigma^2 i^2 + r\right) \\
+c_i &= \frac{1}{2}\Delta t\left(\sigma^2 i^2 + (r-q)i\right)
+\end{align}
+
+I chose the explicit scheme (rather than implicit or Crank-Nicolson)
+specifically because this update rule is a single readable line per node,
+at the cost of needing a fine enough time grid to stay numerically stable.
+
+\subsection{Stability Condition}
+
+The explicit scheme is only stable if $\Delta t$ is small enough relative
+to $\Delta S$. I use the conservative sufficient condition:
+
+\begin{equation}
+\Delta t \le \frac{1}{\sigma^2 M^2 + r}
+\end{equation}
+
+and in \texttt{\_stable\_num\_time\_steps()} I automatically increase the
+number of time steps beyond whatever the caller requested if this bound
+would otherwise be violated, so the scheme cannot silently blow up.
+
+\subsection{Boundary and Barrier Conditions}
+
+At the edges of my price grid, I use:
+
+\begin{align}
+\text{Call: } V(0,t) &= 0, \qquad V(S_{max}, t) = S_{max}e^{-q(T-t)} - Ke^{-r(T-t)} \\
+\text{Put: } V(0,t) &= Ke^{-r(T-t)}, \qquad V(S_{max}, t) = 0
+\end{align}
+
+For a knock-out barrier, I force $V_i^j = 0$ at every node whose price has
+crossed the barrier, at every time step (I check this immediately after
+computing the continuation value, before moving to the next node). This
+models a continuously monitored barrier.
+
+\subsection{Knock-In via In/Out Parity}
+
+I price knock-in barriers using the standard market identity:
+
+\begin{equation}
+V_{\text{knock-in}} = V_{\text{vanilla}} - V_{\text{knock-out}}
+\end{equation}
+
+This holds because holding both the knock-in and the matching knock-out
+version of a barrier option is, payoff for payoff, identical to holding
+the vanilla option: on any given path, exactly one of the two barrier
+contracts pays off, depending on whether the barrier was breached.
+
+\subsection{Greeks From the Grid}
+
+Similarly to my binomial trees, I read delta, gamma and theta directly off
+neighboring grid nodes at today's time slice ($j=0$) around the
+interpolated spot index:
+
+\begin{align}
+\Delta &\approx \frac{V_{i+1}^0 - V_{i-1}^0}{2\Delta S} \\
+\Gamma &\approx \frac{V_{i+1}^0 - 2V_i^0 + V_{i-1}^0}{\Delta S^2} \\
+\Theta &\approx \frac{V_i^1 - V_i^0}{\Delta t}
+\end{align}
+
+and I fall back to bump-and-reprice whenever the spot price sits too close
+to the edge of the grid to safely read a neighboring node, and always for
+vega and rho.
+
+\section{Implied Volatility Calibration}
+
+I implemented my calibration engine in
+\texttt{src/calibration/implied\_volatility.py} to back out the volatility
+that reprices a given market option price under Black-Scholes-Merton.
+
+\subsection{Newton-Raphson}
+
+Starting from an initial guess $\sigma_0$, I iterate:
+
+\begin{equation}
+\sigma_{k+1} = \sigma_k - \frac{C(\sigma_k) - C_{market}}{\mathcal{V}(\sigma_k)}
+\end{equation}
+
+until $|C(\sigma_k) - C_{market}|$ is below my tolerance, using the model's
+own vega as the derivative.
+
+\subsection{Bisection Fallback}
+
+If Newton-Raphson steps outside my $[\sigma_{min}, \sigma_{max}]$ bounds, or
+vega becomes too small to divide by safely, I fall back to a bisection
+search on the same interval, which is guaranteed to converge (much more
+slowly, but reliably) as long as the market price is bracketed between the
+model prices at $\sigma_{min}$ and $\sigma_{max}$.
+
+\subsection{Rejecting Impossible Prices}
+
+Before running either root-finding method, I check the market price
+against the no-arbitrage bounds from Section 2.5. If the market price is
+outside those bounds, no volatility (however extreme) could ever reproduce
+it under Black-Scholes-Merton, so I raise an error immediately instead of
+letting a root finder search forever.
+
+\section{Scenario Analysis}
+
+My scenario engine, in \texttt{src/scenario\_analysis/scenario\_engine.py},
+clones a pricing model with \texttt{copy.deepcopy}, mutates the cloned
+copy's stored attributes directly, and reprices. Because every model in my
+platform recomputes its price from its own stored attributes, this has the
+exact same effect as fully re-running the model with a shocked input,
+without needing model-specific reconstruction logic. I apply the following
+shocks, matching Phase 9 of my project specification:
+
+\begin{itemize}[noitemsep]
+    \item Underlying price: $\pm 1\%, \pm 5\%, \pm 10\%$
+    \item Volatility: $\pm 5, \pm 10$ vol points
+    \item Interest rate: $\pm 50, \pm 100$ basis points
+    \item Time decay: $1, 7, 30$ calendar days forward
+    \item Basket correlation (basket products only): $\pm 5\%, \pm 10\%$ pairwise correlation
+    \item Barrier level (barrier products only): $\pm 5\%, \pm 10\%$ barrier level
+\end{itemize}
+
+\section{Model Validation}
+
+My validation suite, in \texttt{tests/test\_model\_validation.py}, checks
+every one of the following properties, matching Phase 12 of my project
+specification:
+
+\begin{itemize}[noitemsep]
+    \item \textbf{Put-call parity} holds exactly (to floating point precision) for Black-Scholes-Merton and Black-76.
+    \item \textbf{No-arbitrage bounds} are respected by every European closed-form price.
+    \item \textbf{American price $\ge$ European price}, checked on both CRR trees with early exercise enabled versus disabled.
+    \item \textbf{CRR and LR convergence}: the pricing error versus the Black-Scholes benchmark shrinks as I increase the number of tree steps.
+    \item \textbf{Monte Carlo convergence}: the standard error of my price estimate shrinks as I increase the number of simulated paths.
+    \item \textbf{Stable Greeks}: a small perturbation to an input produces a correspondingly small change in the Greeks, not an erratic jump.
+    \item \textbf{Correct barrier behavior}: a knock-out option is worth less than (or numerically close to) the vanilla option, and a barrier set essentially at the money knocks out almost all of the option's value.
+\end{itemize}
+
+\section{Limitations I Am Aware Of}
+
+\begin{itemize}[noitemsep]
+    \item My finite difference PDE solver uses a first-order accurate explicit scheme. A production barrier pricer would typically use Crank-Nicolson for second-order accuracy in time, at the cost of needing a tridiagonal solver.
+    \item My Monte Carlo engine uses plain antithetic variates as its only variance reduction technique. Control variates (pricing the equivalent European option analytically and using it to reduce variance on the path-dependent payoff) would tighten my confidence intervals further.
+    \item My barrier model only supports a single, continuously monitored barrier. Discrete monitoring (barrier only checked at specific dates) and double-barrier structures are not implemented.
+    \item My market data module falls back to manually entered data whenever \texttt{yfinance} or network access is unavailable, which is expected in a sandboxed environment but means live implied volatility surfaces are not something I can guarantee end to end without a live connection.
+\end{itemize}
+
+\section{Future Enhancements I Would Consider}
+
+\begin{itemize}[noitemsep]
+    \item Adding a Crank-Nicolson solver alongside my explicit scheme for the barrier pricer.
+    \item Adding a local volatility or stochastic volatility model (e.g. Heston) for a more realistic volatility smile.
+    \item Adding control variates to my Monte Carlo engine.
+    \item Extending my basket option engine to support discrete monitoring dates for Asian and Lookback products with fewer than daily observations.
+\end{itemize}
+
+\end{document}
