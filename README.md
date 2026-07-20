@@ -2,7 +2,7 @@
 
 In this project, I built a Python derivatives analytics platform that prices seven option types across five different pricing techniques, computes their Greeks, runs scenario/shock analysis on them, visualizes the results, and exposes everything through an interactive Streamlit dashboard. This README documents the folder structure I designed, how to run everything, and what every single file, class, and method in my codebase actually does.
 
-I wrote the mathematical derivation behind every formula in `math_and_logic.tex`. This README focuses on the code itself; I only restate a formula here when it helps explain a design decision.
+I wrote the mathematical derivation behind every formula in `math_and_logic.pdf`. This README focuses on the code itself; I only restate a formula here when it helps explain a design decision.
 
 ## 1. Folder Structure I Designed
 
@@ -146,4 +146,4 @@ Every pricing model has its own test file checking known reference values, put-c
 
 ## 4. A Note on My Finite Difference Barrier Pricer
 
-My barrier PDE solver uses a first-order accurate explicit scheme on purpose, so the update rule stays a single readable line of code. This means a coarse grid can occasionally show a knock-out price a few cents above the true vanilla price (pure discretization error, not a modeling bug) — I discovered exactly this while testing at 80 price steps, and fixed it in my test suite by using a finer 150-step grid with a small numerical tolerance rather than chasing an exact bound. I document this trade-off explicitly in the "Limitations" section of `math_and_logic.tex` rather than hiding it.
+My barrier PDE solver uses a first-order accurate explicit scheme on purpose, so the update rule stays a single readable line of code. This means a coarse grid can occasionally show a knock-out price a few cents above the true vanilla price (pure discretization error, not a modeling bug) — I discovered exactly this while testing at 80 price steps, and fixed it in my test suite by using a finer 150-step grid with a small numerical tolerance rather than chasing an exact bound. I document this trade-off explicitly in the "Limitations" section of `math_and_logic.pdf` rather than hiding it.
