@@ -7,7 +7,7 @@ I wrote the mathematical derivation behind every formula in `math_and_logic.tex`
 ## 1. Folder Structure I Designed
 
 ```
-derivatives_pricing_engine/
+derivatives_pricing/
 ├── requirements.txt
 ├── README.md
 ├── math_and_logic.tex
@@ -57,7 +57,7 @@ I built and tested this project against Python 3.10.
 ### 2.1 Install dependencies
 
 ```bash
-cd derivatives_pricing_engine
+cd derivatives_pricing
 pip install -r requirements.txt
 ```
 
@@ -67,7 +67,7 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-I added `conftest.py` at the project root specifically so pytest adds the project root to `sys.path` before it collects my tests, since every test module imports from `src` using an absolute import like `from src.models.black_scholes import BlackScholesModel`. As long as I run `pytest` from inside `derivatives_pricing_engine/` (or point it at this folder), this works with no extra configuration.
+I added `conftest.py` at the project root specifically so pytest adds the project root to `sys.path` before it collects my tests, since every test module imports from `src` using an absolute import like `from src.models.black_scholes import BlackScholesModel`. As long as I run `pytest` from inside `derivatives_pricing/` (or point it at this folder), this works with no extra configuration.
 
 ### 2.3 Launch the interactive dashboard
 
